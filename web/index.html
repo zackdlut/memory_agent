@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>三叶虫 · 类人记忆系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Noto+Serif+SC:wght@500;700&family=Noto+Sans+SC:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script>
+    // apply saved theme before first paint to avoid a flash of the default theme
+    (function () {
+      try {
+        var t = localStorage.getItem("trilobite-theme") || "parchment";
+        document.documentElement.dataset.theme = t;
+      } catch (e) {
+        document.documentElement.dataset.theme = "parchment";
+      }
+    })();
+  </script>
+</head>
+
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 64 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path class="t-body" d="M32 5C46 5 55 18 55 40C55 62 45 79 32 79C19 79 9 62 9 40C9 18 18 5 32 5Z" />
+          <path class="t-head"
+            d="M17 21C17 12.7 23.7 7 32 7C40.3 7 47 12.7 47 21C42.6 25 37 27.5 32 27.5C27 27.5 21.4 25 17 21Z" />
+          <path class="t-seg" d="M22 33H42M21 41H43M21 49H43M22 57H42M24 65H40M27 72H37" />
+          <line class="t-axis" x1="32" y1="27" x2="32" y2="74" />
+          <circle class="t-eye" cx="26" cy="17.5" r="1.7" />
+          <circle class="t-eye" cx="38" cy="17.5" r="1.7" />
+        </svg>
+      </span>
+      <div class="brand-text">
+        <p class="kicker">Specimen No. 001 — Human-like Memory System</p>
+        <h1>三叶虫</h1>
+        <p class="subtitle">感知 · 编码 · 多层记忆 · 自进化 · 检索 · 推理 · 行为预测</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="theme-switch">
+        <span class="ts-label">主题</span>
+        <select id="theme-select" aria-label="切换显示主题">
+          <option value="parchment">羊皮纸</option>
+          <option value="midnight">午夜</option>
+          <option value="abyss">深海</option>
+        </select>
+      </div>
+      <div id="stats" class="stats"></div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="self"><span class="tab-idx">01</span>三叶虫档案</button>
+    <button class="tab" data-tab="chat"><span class="tab-idx">02</span>与三叶虫聊天</button>
+    <button class="tab" data-tab="ingest"><span class="tab-idx">03</span>摄入记忆</button>
+    <button class="tab" data-tab="ask"><span class="tab-idx">04</span>理解 / 问答</button>
+    <button class="tab" data-tab="predict"><span class="tab-idx">05</span>行为预测</button>
+    <button class="tab" data-tab="persona"><span class="tab-idx">06</span>人格档案</button>
+    <button class="tab" data-tab="graph"><span class="tab-idx">07</span>知识图谱</button>
+  </nav>
+
+  <main>
+
+    <!-- Self (三叶虫档案) -->
+    <section id="self" class="panel active">
+      <p class="kicker">Self Model</p>
+      <h2>三叶虫的自我档案</h2>
+      <p class="hint">三叶虫不是被建模的「人物」，而是一个会成长的助手：每聊一次，它都会反思自己流露的特质、偏好，并记下第一人称的感受。这里是它当前的自我。</p>
+      <div id="self-detail" class="self-detail muted">加载中…</div>
+    </section>
+
+    <!-- Chat -->
+    <section id="chat" class="panel">
+      <div class="chat-layout">
+        <aside class="chat-sessions">
+          <button id="new-chat-btn" class="primary block">＋ 新建聊天</button>
+          <p class="rail-label">会话标本</p>
+          <div id="session-list" class="session-list"></div>
+        </aside>
+
+        <div class="chat-main">
+          <div id="chat-empty" class="chat-empty">
+            <div class="empty-mark" aria-hidden="true">
+              <svg viewBox="0 0 64 84" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path class="t-body" d="M32 5C46 5 55 18 55 40C55 62 45 79 32 79C19 79 9 62 9 40C9 18 18 5 32 5Z" />
+                <path class="t-head"
+                  d="M17 21C17 12.7 23.7 7 32 7C40.3 7 47 12.7 47 21C42.6 25 37 27.5 32 27.5C27 27.5 21.4 25 17 21Z" />
+                <path class="t-seg" d="M22 33H42M21 41H43M21 49H43M22 57H42M24 65H40M27 72H37" />
+                <line class="t-axis" x1="32" y1="27" x2="32" y2="74" />
+              </svg>
+            </div>
+            <p class="empty-title">我是 <b>三叶虫</b>，一个会记住你的 AI 助手</p>
+            <p class="muted">点击左上角「＋ 新建聊天」开始。我会先问你是谁，然后在对话中慢慢理解你、预测你，并记住我们之间的关系。</p>
+          </div>
+          <div id="chat-window" class="chat-window hidden">
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input">
+              <input id="chat-input" type="text" placeholder="输入消息，回车发送…" disabled />
+              <button id="chat-send" class="primary" disabled>发送</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="chat-side">
+          <p class="rail-label">三叶虫对 <span id="side-person">…</span> 的理解</p>
+          <div id="side-understanding" class="side-card muted">开始聊天后这里会实时更新</div>
+          <p class="rail-label">行为预测</p>
+          <div id="side-prediction" class="side-card muted">—</div>
+          <p class="rail-label">本轮用到的记忆</p>
+          <div id="side-memories" class="side-card memories muted">—</div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Ingest -->
+    <section id="ingest" class="panel">
+      <p class="kicker">Encoding</p>
+      <h2>摄入对话 → 沉淀人物 / 关系 / 行为</h2>
+      <p class="hint">粘贴一段多人对话（格式如 <code>Alice: …</code>），系统会抽取实体、属性、关系、行为模式并写入记忆。</p>
+      <textarea id="ingest-text" rows="8"
+        placeholder="Alice: 我最近在学吉他，周末都会练两小时。&#10;Bob: 你总是这么自律，真羡慕。&#10;Alice: 哈哈，我一旦定目标就停不下来。"></textarea>
+      <button id="ingest-btn" class="primary">摄入记忆</button>
+      <div id="ingest-result" class="result"></div>
+    </section>
+
+    <!-- Ask -->
+    <section id="ask" class="panel">
+      <p class="kicker">Reasoning</p>
+      <h2>提问 → 带人物理解的回答（可解释）</h2>
+      <div class="row">
+        <input id="ask-input" type="text" placeholder="例如：Alice 是个怎样的人？" />
+        <button id="ask-btn" class="primary">提问</button>
+      </div>
+      <div id="ask-answer" class="answer"></div>
+      <p class="rail-label">本次用到的记忆来源</p>
+      <div id="ask-memories" class="memories"></div>
+    </section>
+
+    <!-- Predict -->
+    <section id="predict" class="panel">
+      <p class="kicker">Theory of Mind</p>
+      <h2>行为预测</h2>
+      <div class="row">
+        <input id="predict-person" type="text" placeholder="人物，例如 Alice" />
+        <input id="predict-situation" type="text" placeholder="情境，例如 周末有空时" />
+        <button id="predict-btn" class="primary">预测</button>
+      </div>
+      <div id="predict-result" class="result"></div>
+    </section>
+
+    <!-- Persona -->
+    <section id="persona" class="panel">
+      <p class="kicker">Persona Archive</p>
+      <h2>人格档案</h2>
+      <div class="persona-layout">
+        <div id="persona-list" class="persona-list"></div>
+        <div id="persona-detail" class="persona-detail muted">选择左侧人物查看档案</div>
+      </div>
+    </section>
+
+    <!-- Graph -->
+    <section id="graph" class="panel">
+      <p class="kicker">Semantic Memory</p>
+      <h2>知识图谱</h2>
+      <p class="hint">悬停或点击节点可高亮其关联脉络 · 滚轮缩放 · 拖拽平移</p>
+      <div class="graph-stage">
+        <div id="graph-canvas"></div>
+
+        <div class="graph-overlay graph-legend">
+          <p class="overlay-title">图例 / Legend</p>
+          <span class="leg"><i class="glyph glyph-assistant">✦</i>三叶虫</span>
+          <span class="leg"><i class="glyph glyph-person">●</i>人物</span>
+          <span class="leg"><i class="glyph glyph-trait">▲</i>特质</span>
+          <span class="leg"><i class="glyph glyph-pref">◆</i>偏好</span>
+          <span class="leg"><i class="glyph glyph-entity">■</i>实体</span>
+        </div>
+
+        <div class="graph-overlay graph-toolbar">
+          <button id="graph-fit" class="g-btn" title="适应屏幕">适应</button>
+          <button id="graph-relayout" class="g-btn" title="重新布局">重排</button>
+          <button id="graph-physics" class="g-btn" title="开关物理引擎">冻结</button>
+          <span id="graph-count" class="g-count">—</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
