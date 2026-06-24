@@ -15,6 +15,8 @@ with the current person, and (c) mutual acquaintances it shares with them.
 
 from __future__ import annotations
 
+import re
+
 from app.chat.style import compile_style
 from app.config import settings
 from app.llm import llm
@@ -176,32 +178,28 @@ class SelfMemory:
         query = (topic_text or "").strip()
         if not query:
             return ""
+        clean = re.sub(r"[\s\W]+", " ", query)
+        grams = set()
+        for token in clean.split():
+            for i in range(len(token) - 1):
+                grams.add(token[i : i + 2])
+        if not grams:
+            return ""
 
-        def _terms(text: str) -> set[str]:
-            raw = (text or "").strip()
-            terms = {part for part in raw.split() if len(part) >= 2}
-            terms.update(raw[i : i + 2] for i in range(max(len(raw) - 1, 0)))
-            return {term for term in terms if term.strip()}
-
-        def _matches(*parts: str) -> bool:
-            haystack = " ".join(part for part in parts if part)
-            if not haystack:
-                return False
-            return query in haystack or haystack in query or any(
-                term in haystack for term in _terms(query)
-            )
+        def shares(text: str) -> bool:
+            t = text or ""
+            return any(g in t for g in grams)
 
         op = None
         for cand in sorted(profile.opinions, key=lambda o: o.weight, reverse=True):
-            if _matches(cand.topic, cand.stance):
+            if cand.topic and (cand.topic in query or query in cand.stance):
                 op = cand
                 break
 
+        matches = [e for e in reversed(profile.experiences) if shares(e.summary)]
         ex = None
-        for cand in reversed(profile.experiences):
-            if _matches(cand.summary):
-                ex = cand
-                break
+        if matches:
+            ex = next((e for e in matches if person and person in e.summary), matches[0])
 
         pts = []
         if op:
