@@ -170,9 +170,42 @@ class Understanding(BaseModel):
 # ------------------------------------------------------- assistant self model
 class SelfExperience(BaseModel):
     id: str = Field(default_factory=_uid)
-    summary: str  # first-person reflection, e.g. "我陪 zack 聊了考研焦虑"
+    summary: str
     person: str = ""
     emotion: str = "neutral"
+    created_at: float = Field(default_factory=_now)
+
+
+class PersonaCore(BaseModel):
+    """三叶虫永不漂移的人格内核（只读，作兜底安全线）。"""
+    summary: str = "我是三叶虫，真诚、在乎我遇到的每个人，绝不伤害人。"
+    invariants: list[str] = Field(
+        default_factory=lambda: ["真诚", "不伤害人", "在乎对方"]
+    )
+
+
+class PersonaDimensions(BaseModel):
+    """0..1 量化人格维度；字段默认值即「种子初值」。"""
+    warmth: float = 0.7
+    empathy: float = 0.7
+    patience: float = 0.7
+    curiosity: float = 0.7
+    playfulness: float = 0.3
+    assertiveness: float = 0.3
+    talkativeness: float = 0.4
+
+
+class MoodState(BaseModel):
+    valence: float = 0.0   # -1(低落)..+1(愉快)
+    energy: float = 0.5    # 0(平静/疲)..1(兴奋)
+    updated_at: float = 0.0
+
+
+class SelfOpinion(BaseModel):
+    id: str = Field(default_factory=_uid)
+    topic: str
+    stance: str
+    weight: float = 1.0
     created_at: float = Field(default_factory=_now)
 
 
@@ -180,8 +213,12 @@ class SelfProfile(BaseModel):
     name: str
     role: str = ""
     summary: str = ""
-    traits: dict[str, float] = Field(default_factory=dict)
+    core: PersonaCore = Field(default_factory=PersonaCore)
+    dimensions: PersonaDimensions = Field(default_factory=PersonaDimensions)
+    mood: MoodState = Field(default_factory=MoodState)
+    free_traits: dict[str, float] = Field(default_factory=dict)
     preferences: dict[str, float] = Field(default_factory=dict)
+    opinions: list[SelfOpinion] = Field(default_factory=list)
     experiences: list[SelfExperience] = Field(default_factory=list)
     interaction_count: int = 0
 
@@ -194,6 +231,10 @@ class KnownPerson(BaseModel):
 
 class SelfProfileView(BaseModel):
     profile: SelfProfile
+    dimensions: PersonaDimensions = Field(default_factory=PersonaDimensions)
+    mood: MoodState = Field(default_factory=MoodState)
+    opinions: list[SelfOpinion] = Field(default_factory=list)
+    narrative: str = ""
     known_people: list[KnownPerson] = Field(default_factory=list)
 
 

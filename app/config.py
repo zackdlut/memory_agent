@@ -119,6 +119,11 @@ class Settings:
     episodic_recency_half_life_days: float = 30.0
     summary_refresh_cooldown_sec: float = 60.0
 
+    # --- assistant self / persona evolution -----------------------------
+    mood_half_life_hours: float = 6.0
+    dimension_step: float = 0.04
+    reflect_async: bool = True
+
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
