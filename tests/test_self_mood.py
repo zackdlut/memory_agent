@@ -12,7 +12,6 @@ def test_current_mood_regresses_to_neutral(temp_store):
     sp = temp_store.self_profile
     sp.nudge_mood("+", "+")
     # 把更新时间挪到一个半衰期前，应回归到约一半
-    half = temp_store.self_profile  # alias
     p = sp.get()
     pushed_v = p.mood.valence
     p.mood.updated_at = time.time() - 6 * 3600  # = mood_half_life_hours

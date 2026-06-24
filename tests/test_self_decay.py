@@ -11,8 +11,11 @@ def test_decay_pulls_dimensions_toward_seed(temp_store):
 
 def test_decay_prunes_weak_opinions(temp_store):
     sp = temp_store.self_profile
-    sp.add_opinion("深聊", "我喜欢深聊")
-    for _ in range(200):
+    sp.add_opinion("深聊", "我喜欢深聊", gain=5.0)   # strong: should survive
+    sp.add_opinion("闲扯", "我对闲扯无所谓", gain=0.2)  # weak: should be pruned
+    for _ in range(5):
         sp.decay(0.9)
-    assert all(o.weight >= 0.15 for o in sp.get().opinions)
-    assert len(sp.get().opinions) == 0
+    topics = {o.topic for o in sp.get().opinions}
+    assert "闲扯" not in topics            # weak pruned (weight fell below 0.15)
+    assert "深聊" in topics                # strong survived
+    assert all(o.weight >= 0.15 for o in sp.get().opinions)  # invariant on non-empty set

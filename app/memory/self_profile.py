@@ -51,8 +51,9 @@ class SelfProfileStore:
             try:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
                 # migrate: 旧档案的 traits -> free_traits
-                if "free_traits" not in data and "traits" in data:
-                    data["free_traits"] = data.pop("traits")
+                if "traits" in data:
+                    data.setdefault("free_traits", data["traits"])
+                    data.pop("traits", None)
                 return SelfProfile(**data)
             except Exception:
                 pass
