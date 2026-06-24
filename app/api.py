@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -32,7 +33,43 @@ from app.schemas import (
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-app = FastAPI(title="Human Memory Agent", version="0.1.0")
+
+def _preload_models() -> None:
+    """Warm up the models needed for chat so the first turn is not slow.
+
+    - probes the Ollama LLM/embedding endpoint
+    - eagerly loads the (optional) voice models + voiceprint store
+
+    Failures are logged but never abort startup, so the server still boots when
+    Ollama is offline or the voice stack is unavailable.
+    """
+    health = llm.health()
+    if health.get("ok"):
+        print(f"  LLM ready: {health.get('models')}")
+    else:
+        print(f"  LLM not reachable: {health.get('error')}")
+
+    if settings.voice_enabled:
+        from app.voice.engine import engine
+
+        print(f"  Loading voice models (whisper={settings.whisper_model}) ...")
+        if engine.preload():
+            # touch the voiceprint store so it is ready alongside the models
+            _ = chat_manager.voiceprints
+            print("  Voice models ready")
+        else:
+            print("  Voice models unavailable (voice disabled or deps missing)")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Preloading models ...")
+    _preload_models()
+    print("Startup complete.")
+    yield
+
+
+app = FastAPI(title="Human Memory Agent", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/health")

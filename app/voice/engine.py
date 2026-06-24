@@ -62,6 +62,19 @@ class VoiceEngine:
             self._decode_audio = decode_audio
             self._preprocess_wav = preprocess_wav
 
+    def preload(self) -> bool:
+        """Eagerly load the voice models (used at server startup).
+
+        Returns ``True`` if the models are ready, ``False`` if voice is disabled
+        or the dependencies/models could not be loaded. Never raises, so the
+        server can boot even when the optional voice stack is unavailable.
+        """
+        try:
+            self._ensure_loaded()
+            return True
+        except VoiceUnavailable:
+            return False
+
     def _build_initial_prompt(self, hint_names: list[str] | None) -> str | None:
         """Bias the recogniser toward proper nouns it is likely to hear.
 
