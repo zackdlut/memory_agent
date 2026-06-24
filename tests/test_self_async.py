@@ -11,8 +11,7 @@ def test_reply_temperature_scales_with_playfulness():
     assert 0.3 <= lo < hi <= 0.95
 
 
-@patch("app.chat.manager.ChatManager._reply_temperature", return_value=0.6)
-def test_post_exchange_updates_profile(_t, temp_store, monkeypatch):
+def test_post_exchange_updates_profile(temp_store, monkeypatch):
     from app.agent import MemoryAgent
     cm = ChatManager.__new__(ChatManager)
     cm.agent = MemoryAgent(temp_store)

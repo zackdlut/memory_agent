@@ -228,7 +228,7 @@ class SelfMemory:
             labels[name]
             for name, _ in sorted(dims.items(), key=lambda item: item[1], reverse=True)[:3]
         ]
-        parts = [f"我是{self.name}，现在的我{('、'.join(top))}"]
+        parts = [f"我是{self.name}，这阵子的我，{'、'.join(top)}的一面越来越明显了"]
         if sp.opinions:
             strongest = max(sp.opinions, key=lambda o: o.weight)
             parts.append(strongest.stance)

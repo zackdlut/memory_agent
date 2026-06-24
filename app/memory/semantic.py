@@ -135,32 +135,34 @@ class SemanticMemory:
 
     def knows(self, name: str) -> list[str]:
         """People the given (assistant) node has an outgoing relation to."""
-        if not self.g.has_node(name):
-            return []
-        out = []
-        for _, tgt, data in self.g.out_edges(name, data=True):
-            if data.get("kind") == "relation" and self.g.nodes[tgt].get("kind") == "person":
-                out.append(tgt)
-        return out
+        with self._lock:
+            if not self.g.has_node(name):
+                return []
+            out = []
+            for _, tgt, data in self.g.out_edges(name, data=True):
+                if data.get("kind") == "relation" and self.g.nodes[tgt].get("kind") == "person":
+                    out.append(tgt)
+            return out
 
     def social_links(self, person: str) -> list[dict]:
         """Find people connected to ``person`` via a person-person relation,
         searching both edge directions. Used to surface mutual acquaintances."""
-        person = self.resolve(person) or person
-        if not self.g.has_node(person):
-            return []
-        links: dict[str, dict] = {}
-        for _, tgt, data in self.g.out_edges(person, data=True):
-            if data.get("kind") == "relation" and self.g.nodes[tgt].get("kind") == "person":
-                links[tgt] = {"person": tgt, "relation": data.get("label", "认识"), "direction": "out"}
-        for src, _, data in self.g.in_edges(person, data=True):
-            if (
-                data.get("kind") == "relation"
-                and self.g.nodes[src].get("kind") == "person"
-                and src not in links
-            ):
-                links[src] = {"person": src, "relation": data.get("label", "认识"), "direction": "in"}
-        return list(links.values())
+        with self._lock:
+            person = self.resolve(person) or person
+            if not self.g.has_node(person):
+                return []
+            links: dict[str, dict] = {}
+            for _, tgt, data in self.g.out_edges(person, data=True):
+                if data.get("kind") == "relation" and self.g.nodes[tgt].get("kind") == "person":
+                    links[tgt] = {"person": tgt, "relation": data.get("label", "认识"), "direction": "out"}
+            for src, _, data in self.g.in_edges(person, data=True):
+                if (
+                    data.get("kind") == "relation"
+                    and self.g.nodes[src].get("kind") == "person"
+                    and src not in links
+                ):
+                    links[src] = {"person": src, "relation": data.get("label", "认识"), "direction": "in"}
+            return list(links.values())
 
     def commit(self) -> None:
         with self._lock:
@@ -231,59 +233,63 @@ class SemanticMemory:
     # ----------------------------------------------------------------- reads
     def neighbors(self, name: str) -> dict:
         """Return traits / preferences / relations attached to a person."""
-        if not self.g.has_node(name):
-            # try alias resolution
-            name = self.resolve(name) or name
-        if not self.g.has_node(name):
-            return {"traits": [], "preferences": [], "relations": []}
-        traits, prefs, rels = [], [], []
-        for _, tgt, data in self.g.out_edges(name, data=True):
-            entry = {"target": self.g.nodes[tgt].get("label", tgt), "label": data.get("label"),
-                     "weight": data.get("weight", 1.0), "count": data.get("count", 1)}
-            if data.get("kind") == "trait":
-                traits.append(entry)
-            elif data.get("kind") == "preference":
-                prefs.append(entry)
-            elif data.get("kind") == "relation":
-                rels.append(entry)
-        traits.sort(key=lambda x: x["weight"], reverse=True)
-        prefs.sort(key=lambda x: x["weight"], reverse=True)
-        rels.sort(key=lambda x: x["weight"], reverse=True)
-        return {"traits": traits, "preferences": prefs, "relations": rels}
+        with self._lock:
+            if not self.g.has_node(name):
+                # try alias resolution
+                name = self.resolve(name) or name
+            if not self.g.has_node(name):
+                return {"traits": [], "preferences": [], "relations": []}
+            traits, prefs, rels = [], [], []
+            for _, tgt, data in self.g.out_edges(name, data=True):
+                entry = {"target": self.g.nodes[tgt].get("label", tgt), "label": data.get("label"),
+                         "weight": data.get("weight", 1.0), "count": data.get("count", 1)}
+                if data.get("kind") == "trait":
+                    traits.append(entry)
+                elif data.get("kind") == "preference":
+                    prefs.append(entry)
+                elif data.get("kind") == "relation":
+                    rels.append(entry)
+            traits.sort(key=lambda x: x["weight"], reverse=True)
+            prefs.sort(key=lambda x: x["weight"], reverse=True)
+            rels.sort(key=lambda x: x["weight"], reverse=True)
+            return {"traits": traits, "preferences": prefs, "relations": rels}
 
     def resolve(self, name: str) -> str | None:
         """Resolve an alias to a canonical person node, if possible."""
-        if self.g.has_node(name):
-            return name
-        for node, data in self.g.nodes(data=True):
-            if data.get("kind") == "person" and name in data.get("aliases", []):
-                return node
-        return None
+        with self._lock:
+            if self.g.has_node(name):
+                return name
+            for node, data in self.g.nodes(data=True):
+                if data.get("kind") == "person" and name in data.get("aliases", []):
+                    return node
+            return None
 
     def persons(self) -> list[str]:
-        return [n for n, d in self.g.nodes(data=True) if d.get("kind") == "person"]
+        with self._lock:
+            return [n for n, d in self.g.nodes(data=True) if d.get("kind") == "person"]
 
     def export(self) -> dict:
         """Graph in a vis-network friendly shape (nodes + edges)."""
-        nodes = []
-        for n, d in self.g.nodes(data=True):
-            nodes.append(
-                {
-                    "id": n,
-                    "label": d.get("label", n),
-                    "group": d.get("kind", "entity"),
-                    "count": d.get("count", 1),
-                }
-            )
-        edges = []
-        for s, t, d in self.g.edges(data=True):
-            edges.append(
-                {
-                    "from": s,
-                    "to": t,
-                    "label": d.get("label", ""),
-                    "kind": d.get("kind", "relation"),
-                    "weight": d.get("weight", 1.0),
-                }
-            )
-        return {"nodes": nodes, "edges": edges}
+        with self._lock:
+            nodes = []
+            for n, d in self.g.nodes(data=True):
+                nodes.append(
+                    {
+                        "id": n,
+                        "label": d.get("label", n),
+                        "group": d.get("kind", "entity"),
+                        "count": d.get("count", 1),
+                    }
+                )
+            edges = []
+            for s, t, d in self.g.edges(data=True):
+                edges.append(
+                    {
+                        "from": s,
+                        "to": t,
+                        "label": d.get("label", ""),
+                        "kind": d.get("kind", "relation"),
+                        "weight": d.get("weight", 1.0),
+                    }
+                )
+            return {"nodes": nodes, "edges": edges}
