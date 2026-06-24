@@ -336,37 +336,55 @@ async function loadSelf() {
     const r = await api("/api/self");
     const p = r.profile;
     const sortObj = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
-    const traits = sortObj(p.traits)
-      .map(([k, v]) => `<span class="tag trait">${esc(k)} <small>${v}</small></span>`)
+
+    const SEED = { warmth: 0.7, empathy: 0.7, patience: 0.7, curiosity: 0.7, playfulness: 0.3, assertiveness: 0.3, talkativeness: 0.4 };
+    const DIM_LABEL = { warmth: "温暖", empathy: "共情", patience: "耐心", curiosity: "好奇", playfulness: "俏皮", assertiveness: "主见", talkativeness: "话量" };
+    const dims = r.dimensions || {};
+    const dimBars = Object.keys(DIM_LABEL).map((k) => {
+      const v = dims[k] ?? SEED[k];
+      const pct = Math.round(v * 100);
+      const d = v - SEED[k];
+      const arrow = d > 0.03 ? ' <span class="up">↑</span>' : d < -0.03 ? ' <span class="down">↓</span>' : "";
+      return `<div class="dim-row"><span class="dim-name">${DIM_LABEL[k]}</span>
+        <span class="dim-bar"><i style="width:${pct}%"></i></span>
+        <span class="dim-val">${v.toFixed(2)}${arrow}</span></div>`;
+    }).join("");
+
+    const mood = r.mood || { valence: 0, energy: 0.5 };
+    const moodFace = mood.valence > 0.3 ? "😊" : mood.valence < -0.3 ? "😔" : "🙂";
+    const moodTxt = `${moodFace} 情绪 ${mood.valence.toFixed(2)} · 能量 ${mood.energy.toFixed(2)}`;
+
+    const opinions = (r.opinions || [])
+      .map((o) => `<div class="kv">· ${esc(o.stance)} <small class="muted">(${esc(o.topic)})</small></div>`)
       .join("");
+
     const prefs = sortObj(p.preferences)
       .map(([k, v]) => `<span class="tag pref">${esc(k)} <small>${v}</small></span>`)
       .join("");
+    const ftraits = sortObj(p.free_traits || {})
+      .map(([k, v]) => `<span class="tag trait">${esc(k)} <small>${v}</small></span>`)
+      .join("");
     const exps = (p.experiences || [])
-      .slice()
-      .reverse()
-      .slice(0, 12)
-      .map(
-        (e) => `<div class="kv">· ${esc(e.summary)}
-          ${e.person ? `<span class="tag rel">${esc(e.person)}</span>` : ""}
-          ${e.emotion && e.emotion !== "neutral" ? `<span class="tag">${esc(e.emotion)}</span>` : ""}</div>`
-      )
+      .slice().reverse().slice(0, 12)
+      .map((e) => `<div class="kv">· ${esc(e.summary)}
+        ${e.person ? `<span class="tag rel">${esc(e.person)}</span>` : ""}
+        ${e.emotion && e.emotion !== "neutral" ? `<span class="tag">${esc(e.emotion)}</span>` : ""}</div>`)
       .join("");
     const known = (r.known_people || [])
-      .map(
-        (k) => `<div class="kv">· <b>${esc(k.name)}</b>
-          <span class="muted">${esc(k.relationship)}</span></div>`
-      )
+      .map((k) => `<div class="kv">· <b>${esc(k.name)}</b> <span class="muted">${esc(k.relationship)}</span></div>`)
       .join("");
+
     box.classList.remove("muted");
     box.innerHTML = `
       <div class="detail-head">${avatarHTML(ASSISTANT_NAME, 52)}
         <div><h2>${esc(p.name)}</h2>
         <div class="muted">${esc(p.role)}</div></div>
       </div>
-      <p class="self-summary">${esc(p.summary)}</p>
-      <div class="kv muted">已互动 ${p.interaction_count} 次</div>
-      <h3>进化中的特质</h3>${traits || '<span class="muted">无</span>'}
+      <p class="self-summary">${esc(r.narrative || p.summary)}</p>
+      <div class="kv muted">已互动 ${p.interaction_count} 次 · ${moodTxt}</div>
+      <h3>人格维度（相对种子 ↑/↓）</h3><div class="dims">${dimBars}</div>
+      <h3>我形成的观点</h3>${opinions || '<span class="muted">还没形成</span>'}
+      <h3>进化中的特质</h3>${ftraits || '<span class="muted">无</span>'}
       <h3>偏好 / 态度</h3>${prefs || '<span class="muted">还没形成</span>'}
       <h3>三叶虫的自我记忆</h3>${exps || '<span class="muted">还没有记下感受，聊几句吧</span>'}
       <h3>认识的人</h3>${known || '<span class="muted">还没认识谁</span>'}`;

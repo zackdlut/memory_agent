@@ -1071,3 +1071,11 @@ div.vis-tooltip {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.dim-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.dim-name { width: 3em; font-size: 13px; color: var(--muted, #888); }
+.dim-bar { flex: 1; height: 8px; background: rgba(127,127,127,.18); border-radius: 4px; overflow: hidden; }
+.dim-bar i { display: block; height: 100%; background: var(--accent, #4a90d9); }
+.dim-val { width: 4.2em; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.dim-val .up { color: #2ea043; }
+.dim-val .down { color: #d1242f; }
