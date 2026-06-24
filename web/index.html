@@ -15,12 +15,15 @@
   <script>
     // apply saved theme before first paint to avoid a flash of the default theme
     (function () {
+      var t = "parchment";
       try {
-        var t = localStorage.getItem("trilobite-theme") || "parchment";
-        document.documentElement.dataset.theme = t;
-      } catch (e) {
-        document.documentElement.dataset.theme = "parchment";
-      }
+        t = localStorage.getItem("trilobite-theme") || "parchment";
+      } catch (e) {}
+      var el = document.documentElement;
+      el.dataset.theme = t;
+      // tell the browser this page manages its own colours so Edge / Chrome
+      // auto-dark mode doesn't force-darken the light "parchment" theme.
+      el.style.colorScheme = t === "parchment" ? "light" : "dark";
     })();
   </script>
 </head>
@@ -108,12 +111,15 @@
             <div id="voice-confirm" class="voice-confirm hidden"></div>
             <div id="voice-status" class="voice-status hidden"></div>
             <div class="chat-input">
-              <button id="chat-mic" class="mic-btn" title="按一下开始说话，再按一下结束" disabled>🎙</button>
+              <button id="chat-mic" class="mic-btn" title="按一下开始说话，再按一下结束；开启「连续对话」后点一下进入免提模式" disabled>🎙</button>
               <input id="chat-input" type="text" placeholder="输入消息，回车发送…" disabled />
               <button id="chat-send" class="primary" disabled>发送</button>
             </div>
             <label class="tts-toggle">
               <input id="tts-toggle" type="checkbox" /> 语音回复（三叶虫朗读）
+            </label>
+            <label class="tts-toggle">
+              <input id="handsfree-toggle" type="checkbox" /> 连续对话（免提，点麦克风开始/结束）
             </label>
           </div>
         </div>

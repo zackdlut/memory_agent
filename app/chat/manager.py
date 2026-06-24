@@ -205,7 +205,13 @@ class ChatManager:
 
         from app.voice.engine import engine
 
-        transcript, emb = engine.process(audio_bytes)
+        # bias recognition toward people we already know (proper nouns)
+        try:
+            hint_names = self.agent.store.persona.names()
+        except Exception:
+            hint_names = []
+
+        transcript, emb = engine.process(audio_bytes, hint_names=hint_names)
         emb = np.asarray(emb, dtype=np.float32)
 
         if session.state == "awaiting_identity":

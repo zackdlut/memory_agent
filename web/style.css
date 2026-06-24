@@ -6,6 +6,8 @@
 
 :root,
 [data-theme="parchment"] {
+  /* opt out of the browser auto-dark mode (e.g. Edge) for this light theme */
+  color-scheme: light;
   /* surfaces (light, warm paper) */
   --ink:        #f1ead9;   /* page base */
   --ink-2:      #fbf6ea;   /* panels / cards */
@@ -70,6 +72,7 @@
 
 /* ---- midnight: warm dark ------------------------------------------------- */
 [data-theme="midnight"] {
+  color-scheme: dark;
   --ink:        #1a1712;
   --ink-2:      #221d16;
   --ink-3:      #2a241b;
@@ -121,6 +124,7 @@
 
 /* ---- abyss: deep teal / blue -------------------------------------------- */
 [data-theme="abyss"] {
+  color-scheme: dark;
   --ink:        #0e1820;
   --ink-2:      #13212b;
   --ink-3:      #182a36;

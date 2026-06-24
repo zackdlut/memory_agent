@@ -716,19 +716,38 @@ function setChatEnabled(on) {
 }
 
 // ---------------------------------------------------------------- TTS
+// resolves when the utterance finishes (or immediately when TTS is off/unsupported)
+// so the hands-free loop can wait for 三叶虫 to stop talking before listening again.
 function speak(text) {
-  if (!$("#tts-toggle") || !$("#tts-toggle").checked) return;
-  if (!("speechSynthesis" in window) || !text) return;
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "zh-CN";
-    const zh = (window.speechSynthesis.getVoices() || []).find((v) =>
-      (v.lang || "").toLowerCase().startsWith("zh")
-    );
-    if (zh) u.voice = zh;
-    window.speechSynthesis.speak(u);
-  } catch (e) {}
+  return new Promise((resolve) => {
+    if (!$("#tts-toggle") || !$("#tts-toggle").checked) return resolve();
+    if (!("speechSynthesis" in window) || !text) return resolve();
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-CN";
+      const zh = (window.speechSynthesis.getVoices() || []).find((v) =>
+        (v.lang || "").toLowerCase().startsWith("zh")
+      );
+      if (zh) u.voice = zh;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      u.onend = finish;
+      u.onerror = finish;
+      // safety net: some browsers never fire onend for long text
+      const guard = setTimeout(finish, Math.max(4000, text.length * 220));
+      const clearGuard = () => clearTimeout(guard);
+      u.addEventListener("end", clearGuard);
+      u.addEventListener("error", clearGuard);
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      resolve();
+    }
+  });
 }
 
 async function openSession(id) {
@@ -740,6 +759,7 @@ async function openSession(id) {
     el.classList.toggle("active", el.dataset.id === id)
   );
   resetSidePanel();
+  if (conversing) stopConversation();
   clearVoiceUI();
   try {
     const detail = await api(`/api/chat/session/${id}`);
@@ -846,6 +866,60 @@ let mediaRecorder = null;
 let recordChunks = [];
 let recording = false;
 
+// --- hands-free continuous conversation state ---
+let conversing = false; // hands-free loop is active
+let loopPaused = false; // paused while waiting for identity confirm
+let hfStream = null; // persistent mic stream for the whole loop
+let hfCtx = null; // AudioContext used for energy-based VAD
+let hfAnalyser = null;
+let hfSource = null;
+let hfRecorder = null;
+let hfChunks = [];
+let vadTimer = null;
+let hfState = null; // { hasSpoken, startAt, lastVoiceAt }
+
+// VAD / utterance tuning (browser-side, energy based)
+const VAD_START_RMS = 0.025; // RMS above this counts as speech
+const VAD_SILENCE_MS = 900; // trailing silence that ends an utterance
+const VAD_MAX_MS = 15000; // hard cap on a single utterance
+const VAD_MIN_SPEECH_MS = 300; // shorter clips are discarded as noise
+const VAD_IDLE_RESET_MS = 20000; // recycle recorder if nobody speaks
+
+function getMicConstraints() {
+  // browser DSP noticeably improves Whisper accuracy and kills TTS echo
+  return {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+  };
+}
+
+function pickMimeType() {
+  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) return "";
+  const cands = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+  for (const c of cands) {
+    if (MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return "";
+}
+
+function newRecorder(stream) {
+  const mime = pickMimeType();
+  try {
+    return mime
+      ? new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 32000 })
+      : new MediaRecorder(stream);
+  } catch (e) {
+    return new MediaRecorder(stream);
+  }
+}
+
+function isHandsFree() {
+  const t = $("#handsfree-toggle");
+  return !!(t && t.checked);
+}
+
 function voiceStatus(text) {
   const el = $("#voice-status");
   if (!el) return;
@@ -867,26 +941,70 @@ function clearVoiceUI() {
   voiceStatus("");
 }
 
-async function toggleRecording() {
+// shared rendering for a /api/chat/voice response; returns the stage + reply so
+// callers (single-shot vs hands-free loop) can decide what to do next.
+function applyVoiceResponse(r) {
+  if (!r.identified && !r.person) {
+    // identity stage: show transcript + confirm bar, do not bind yet
+    if (r.transcript) $("#chat-input").value = r.transcript;
+    appendBubble("assistant", r.reply);
+    renderVoiceConfirm(r);
+    return { stage: "identity", reply: r.reply };
+  }
+  // active stage: full message round-trip
+  if (r.transcript) appendBubble("user", r.transcript);
+  if (r.person) currentPerson = r.person;
+  appendBubble("assistant", r.reply);
+  if (r.person) $("#side-person").textContent = r.person;
+  renderSide(r);
+  refreshStats();
+  loadSessions();
+  return { stage: "active", reply: r.reply };
+}
+
+async function postVoice(blob) {
+  const fd = new FormData();
+  fd.append("session_id", currentSession);
+  fd.append("audio", blob, "voice.webm");
+  return api("/api/chat/voice", { method: "POST", body: fd });
+}
+
+// ---------------------------------------------------------- mic entry point
+function onMicClick() {
   if (!voiceSupported) {
     alert("当前浏览器不支持录音（需要 MediaRecorder + 麦克风权限）。");
     return;
   }
   if (!currentSession) return;
+  if (isHandsFree()) {
+    if (conversing) stopConversation();
+    else startConversation();
+  } else {
+    toggleRecording();
+  }
+}
+
+// ---------------------------------------------------- single-shot recording
+async function toggleRecording() {
   if (recording) {
     stopRecording();
     return;
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: getMicConstraints() });
     recordChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder = newRecorder(stream);
     mediaRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) recordChunks.push(e.data);
     };
     mediaRecorder.onstop = async () => {
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      if (blob.size < 1200) {
+        // too short / empty -> don't bother the recogniser
+        voiceStatus("");
+        return;
+      }
       await uploadVoice(blob);
     };
     mediaRecorder.start();
@@ -915,35 +1033,185 @@ async function uploadVoice(blob) {
   if (!currentSession) return;
   setChatEnabled(false);
   try {
-    const fd = new FormData();
-    fd.append("session_id", currentSession);
-    fd.append("audio", blob, "voice.webm");
-    const r = await api("/api/chat/voice", { method: "POST", body: fd });
+    const r = await postVoice(blob);
     voiceStatus("");
-
-    if (!r.identified && !r.person) {
-      // identity stage: show transcript + confirm bar, do not bind yet
-      if (r.transcript) $("#chat-input").value = r.transcript;
-      appendBubble("assistant", r.reply);
-      speak(r.reply);
-      renderVoiceConfirm(r);
-    } else {
-      // active stage: full message round-trip
-      if (r.transcript) appendBubble("user", r.transcript);
-      if (r.person) currentPerson = r.person;
-      appendBubble("assistant", r.reply);
-      speak(r.reply);
-      if (r.person) $("#side-person").textContent = r.person;
-      renderSide(r);
-      refreshStats();
-      loadSessions();
-    }
+    const res = applyVoiceResponse(r);
+    speak(res.reply);
   } catch (e) {
     voiceStatus("");
     appendBubble("assistant", "（语音出错了：" + e.message + "）");
   } finally {
     setChatEnabled(true);
   }
+}
+
+// --------------------------------------------- hands-free conversation loop
+async function startConversation() {
+  try {
+    hfStream = await navigator.mediaDevices.getUserMedia({ audio: getMicConstraints() });
+  } catch (e) {
+    alert("无法访问麦克风：" + e.message);
+    return;
+  }
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) {
+    hfStream.getTracks().forEach((t) => t.stop());
+    hfStream = null;
+    alert("当前浏览器不支持连续对话所需的音频分析（AudioContext）。");
+    return;
+  }
+  try {
+    hfCtx = new AC();
+    hfSource = hfCtx.createMediaStreamSource(hfStream);
+    hfAnalyser = hfCtx.createAnalyser();
+    hfAnalyser.fftSize = 2048;
+    hfSource.connect(hfAnalyser);
+  } catch (e) {
+    teardownAudio();
+    alert("无法初始化音频分析：" + e.message);
+    return;
+  }
+  conversing = true;
+  loopPaused = false;
+  $("#chat-mic").classList.add("recording");
+  $("#chat-mic").textContent = "■";
+  listenOnce();
+}
+
+function teardownAudio() {
+  if (vadTimer) {
+    clearInterval(vadTimer);
+    vadTimer = null;
+  }
+  if (hfStream) {
+    hfStream.getTracks().forEach((t) => t.stop());
+    hfStream = null;
+  }
+  if (hfCtx) {
+    try {
+      hfCtx.close();
+    } catch (e) {}
+    hfCtx = null;
+  }
+  hfAnalyser = null;
+  hfSource = null;
+}
+
+function stopConversation() {
+  conversing = false;
+  loopPaused = false;
+  if (vadTimer) {
+    clearInterval(vadTimer);
+    vadTimer = null;
+  }
+  if (hfRecorder) {
+    try {
+      hfRecorder.onstop = null;
+      if (hfRecorder.state !== "inactive") hfRecorder.stop();
+    } catch (e) {}
+    hfRecorder = null;
+  }
+  teardownAudio();
+  $("#chat-mic").classList.remove("recording");
+  $("#chat-mic").textContent = "🎙";
+  voiceStatus("");
+}
+
+function listenOnce() {
+  if (!conversing || loopPaused || !hfStream) return;
+  hfChunks = [];
+  hfRecorder = newRecorder(hfStream);
+  hfRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) hfChunks.push(e.data);
+  };
+  hfRecorder.onstop = onUtteranceStop;
+  const startAt = Date.now();
+  hfState = { hasSpoken: false, startAt, lastVoiceAt: startAt };
+  try {
+    hfRecorder.start();
+  } catch (e) {
+    return;
+  }
+  voiceStatus("聆听中…说话即可（点麦克风结束）");
+
+  const buf = new Uint8Array(hfAnalyser ? hfAnalyser.fftSize : 0);
+  vadTimer = setInterval(() => {
+    if (!conversing || !hfAnalyser) return;
+    const now = Date.now();
+    hfAnalyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / buf.length);
+    if (rms > VAD_START_RMS) {
+      if (!hfState.hasSpoken) voiceStatus("录音中…");
+      hfState.hasSpoken = true;
+      hfState.lastVoiceAt = now;
+    }
+    const elapsed = now - hfState.startAt;
+    const silence = now - hfState.lastVoiceAt;
+    if (hfState.hasSpoken && silence > VAD_SILENCE_MS) return finishUtterance();
+    if (elapsed > VAD_MAX_MS) return finishUtterance();
+    // nobody spoke for a long time -> recycle so the blob never balloons
+    if (!hfState.hasSpoken && elapsed > VAD_IDLE_RESET_MS) return finishUtterance();
+  }, 100);
+}
+
+function finishUtterance() {
+  if (vadTimer) {
+    clearInterval(vadTimer);
+    vadTimer = null;
+  }
+  try {
+    if (hfRecorder && hfRecorder.state !== "inactive") hfRecorder.stop();
+  } catch (e) {}
+}
+
+async function onUtteranceStop() {
+  const spoke = hfState && hfState.hasSpoken;
+  const dur = hfState ? Date.now() - hfState.startAt : 0;
+  const mime = (hfRecorder && hfRecorder.mimeType) || "audio/webm";
+  const blob = new Blob(hfChunks, { type: mime });
+  hfRecorder = null;
+  if (!conversing) return;
+  if (!spoke || dur < VAD_MIN_SPEECH_MS || blob.size < 1200) {
+    // silence / noise -> just keep listening
+    if (conversing && !loopPaused) listenOnce();
+    return;
+  }
+  await processLoopBlob(blob);
+}
+
+async function processLoopBlob(blob) {
+  setChatEnabled(false);
+  voiceStatus("识别中…");
+  let stage = "active";
+  let reply = "";
+  try {
+    const r = await postVoice(blob);
+    const res = applyVoiceResponse(r);
+    stage = res.stage;
+    reply = res.reply;
+  } catch (e) {
+    appendBubble("assistant", "（语音出错了：" + e.message + "）");
+    setChatEnabled(true);
+    voiceStatus("");
+    if (conversing && !loopPaused) listenOnce();
+    return;
+  }
+  setChatEnabled(true);
+  voiceStatus("三叶虫回复中…");
+  await speak(reply); // don't record while 三叶虫 is talking (avoids echo)
+  voiceStatus("");
+  if (stage === "identity") {
+    // wait for the user to confirm who they are before resuming the loop
+    loopPaused = true;
+    voiceStatus("请确认身份后继续对话…");
+    return;
+  }
+  if (conversing && !loopPaused) listenOnce();
 }
 
 function renderVoiceConfirm(r) {
@@ -980,6 +1248,7 @@ async function confirmVoice(person) {
   if (!currentSession || !person) return;
   clearVoiceUI();
   setChatEnabled(false);
+  let reply = "";
   try {
     const r = await api("/api/chat/voice/confirm", {
       method: "POST",
@@ -987,7 +1256,7 @@ async function confirmVoice(person) {
     });
     if (r.person) currentPerson = r.person;
     appendBubble("assistant", r.reply);
-    speak(r.reply);
+    reply = r.reply;
     if (r.person) $("#side-person").textContent = r.person;
     renderSide(r);
     $("#chat-input").value = "";
@@ -998,9 +1267,19 @@ async function confirmVoice(person) {
   } finally {
     setChatEnabled(true);
   }
+  await speak(reply);
+  // identity settled -> resume the hands-free loop if it was paused for this
+  if (conversing) {
+    loopPaused = false;
+    listenOnce();
+  }
 }
 
-$("#chat-mic").addEventListener("click", toggleRecording);
+$("#chat-mic").addEventListener("click", onMicClick);
+// turning the hands-free switch off mid-conversation should end the loop
+$("#handsfree-toggle")?.addEventListener("change", () => {
+  if (!isHandsFree() && conversing) stopConversation();
+});
 // warm up voice list for TTS (some browsers populate asynchronously)
 if ("speechSynthesis" in window) {
   window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
@@ -1078,6 +1357,8 @@ const THEMES = ["parchment", "midnight", "abyss"];
 function applyTheme(name, persist) {
   const theme = THEMES.includes(name) ? name : "parchment";
   document.documentElement.dataset.theme = theme;
+  // keep color-scheme in sync so browser auto-dark mode doesn't override us
+  document.documentElement.style.colorScheme = theme === "parchment" ? "light" : "dark";
   if (persist) {
     try {
       localStorage.setItem(THEME_KEY, theme);

@@ -73,6 +73,8 @@ class Settings:
     voice_enabled: bool = field(
         default_factory=lambda: (_get("VOICE_ENABLED", default="1") or "1") not in ("0", "false", "False")
     )
+    # for Chinese, "medium" is noticeably more accurate than "small" at the cost
+    # of speed/memory -- bump WHISPER_MODEL=medium if your machine can afford it.
     whisper_model: str = field(
         default_factory=lambda: _get("WHISPER_MODEL", default="small") or "small"
     )
@@ -84,6 +86,15 @@ class Settings:
     )
     whisper_language: str = field(
         default_factory=lambda: _get("WHISPER_LANGUAGE", default="zh") or "zh"
+    )
+    # beam width for decoding (higher = more accurate, slower)
+    whisper_beam_size: int = field(
+        default_factory=lambda: int(_get("WHISPER_BEAM_SIZE", default="5") or 5)
+    )
+    # use faster-whisper's built-in Silero VAD to drop silence/noise segments
+    whisper_vad: bool = field(
+        default_factory=lambda: (_get("WHISPER_VAD", default="1") or "1")
+        not in ("0", "false", "False")
     )
     # cosine-similarity thresholds for matching a voiceprint to a known person
     voiceprint_threshold: float = field(
