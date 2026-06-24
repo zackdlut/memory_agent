@@ -53,9 +53,7 @@ class SelfMemory:
 
     # --------------------------------------------------------------- evolve
     def reflect(self, person: str, user_text: str, reply: str) -> None:
-        """After an exchange, let 三叶虫 reflect on itself: extract the traits /
-        preferences it just showed and record a first-person experience, then
-        persist them into its profile and knowledge graph. Best-effort only."""
+        """互动后反思：推动维度漂移、推动心情、形成观点、记第一人称感受。Best-effort。"""
         try:
             data = llm.chat_json(
                 SELF_REFLECT_TEMPLATE.format(
@@ -68,22 +66,40 @@ class SelfMemory:
         if not isinstance(data, dict):
             return
 
-        traits = [str(t).strip() for t in (data.get("traits") or []) if str(t).strip()]
-        prefs = [str(p).strip() for p in (data.get("preferences") or []) if str(p).strip()]
+        sp = self.store.self_profile
+
+        signals = data.get("dimension_signals") or {}
+        if isinstance(signals, dict):
+            for name, sign in signals.items():
+                sp.apply_dimension_signal(str(name), str(sign))
+
+        for trait in data.get("free_traits") or []:
+            t = str(trait).strip()
+            if t:
+                sp.reinforce_trait(t)
+                self.store.semantic.add_self_trait(self.name, t)
+        for pref in data.get("preferences") or []:
+            pr = str(pref).strip()
+            if pr:
+                sp.reinforce_preference(pr)
+                self.store.semantic.add_self_preference(self.name, pr)
+
+        op = data.get("opinion") or {}
+        if isinstance(op, dict):
+            sp.add_opinion(str(op.get("topic") or ""), str(op.get("stance") or ""))
+
         experience = str(data.get("experience") or "").strip()
         emotion = str(data.get("emotion") or "neutral").strip() or "neutral"
-
-        for trait in traits:
-            self.store.self_profile.reinforce_trait(trait)
-            self.store.semantic.add_self_trait(self.name, trait)
-        for pref in prefs:
-            self.store.self_profile.reinforce_preference(pref)
-            self.store.semantic.add_self_preference(self.name, pref)
         if experience:
-            self.store.self_profile.add_experience(
+            sp.add_experience(
                 SelfExperience(summary=experience, person=person, emotion=emotion)
             )
-        self.store.self_profile.bump_interaction()
+
+        push = data.get("mood_push") or {}
+        if isinstance(push, dict):
+            sp.nudge_mood(str(push.get("valence") or "0"), str(push.get("energy") or "0"))
+
+        sp.bump_interaction()
         self.store.commit()
 
     # -------------------------------------------------------------- read side
