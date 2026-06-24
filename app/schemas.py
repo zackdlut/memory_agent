@@ -186,18 +186,18 @@ class PersonaCore(BaseModel):
 
 class PersonaDimensions(BaseModel):
     """0..1 量化人格维度；字段默认值即「种子初值」。"""
-    warmth: float = 0.7
-    empathy: float = 0.7
-    patience: float = 0.7
-    curiosity: float = 0.7
-    playfulness: float = 0.3
-    assertiveness: float = 0.3
-    talkativeness: float = 0.4
+    warmth: float = Field(default=0.7, ge=0.0, le=1.0)
+    empathy: float = Field(default=0.7, ge=0.0, le=1.0)
+    patience: float = Field(default=0.7, ge=0.0, le=1.0)
+    curiosity: float = Field(default=0.7, ge=0.0, le=1.0)
+    playfulness: float = Field(default=0.3, ge=0.0, le=1.0)
+    assertiveness: float = Field(default=0.3, ge=0.0, le=1.0)
+    talkativeness: float = Field(default=0.4, ge=0.0, le=1.0)
 
 
 class MoodState(BaseModel):
-    valence: float = 0.0   # -1(低落)..+1(愉快)
-    energy: float = 0.5    # 0(平静/疲)..1(兴奋)
+    valence: float = Field(default=0.0, ge=-1.0, le=1.0)   # -1(低落)..+1(愉快)
+    energy: float = Field(default=0.5, ge=0.0, le=1.0)    # 0(平静/疲)..1(兴奋)
     updated_at: float = 0.0
 
 
