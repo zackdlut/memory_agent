@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -27,6 +27,7 @@ from app.schemas import (
     SelfProfileView,
     SessionDetail,
     SessionSummary,
+    VoiceConfirmRequest,
 )
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -189,6 +190,34 @@ def chat_message(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="message is empty")
     try:
         return chat_manager.handle_message(req.session_id, req.message)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+
+
+@app.post("/api/chat/voice", response_model=ChatResponse)
+async def chat_voice(
+    session_id: str = Form(...),
+    audio: UploadFile = File(...),
+) -> ChatResponse:
+    from app.voice.engine import VoiceUnavailable
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="audio is empty")
+    try:
+        return chat_manager.handle_voice(session_id, audio_bytes)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="session not found")
+    except VoiceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/chat/voice/confirm", response_model=ChatResponse)
+def chat_voice_confirm(req: VoiceConfirmRequest) -> ChatResponse:
+    if not req.person.strip():
+        raise HTTPException(status_code=400, detail="person is required")
+    try:
+        return chat_manager.confirm_voice(req.session_id, req.person)
     except KeyError:
         raise HTTPException(status_code=404, detail="session not found")
 

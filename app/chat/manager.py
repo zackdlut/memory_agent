@@ -31,6 +31,7 @@ from app.schemas import (
     SessionDetail,
     TraitWeight,
     Understanding,
+    VoiceSuggestion,
 )
 
 HISTORY_TURNS = 6  # how many recent messages to feed back into the reply prompt
@@ -42,6 +43,9 @@ class ChatManager:
         self.sessions = SessionStore()
         self.assistant = settings.assistant_name
         self.self_memory = SelfMemory(self.agent.store)
+        # voiceprints + per-session pending embedding awaiting identity confirm
+        self._voiceprints = None  # lazily created VoiceprintStore
+        self._pending_voiceprints: dict[str, "np.ndarray"] = {}
         # seed the assistant's self node + backfill acquaintances it already has
         known = [s.person for s in self.sessions.list() if s.person]
         try:
@@ -55,6 +59,16 @@ class ChatManager:
         greeting = f"你好，我是{self.assistant}，很高兴认识你！请问你是谁呀？"
         self.sessions.add_message(session.id, "assistant", greeting)
         return CreateSessionResponse(session_id=session.id, greeting=greeting)
+
+    # ------------------------------------------------------------ voiceprints
+    @property
+    def voiceprints(self):
+        """Lazily-created voiceprint store (only when voice is first used)."""
+        if self._voiceprints is None:
+            from app.voice.store import VoiceprintStore
+
+            self._voiceprints = VoiceprintStore()
+        return self._voiceprints
 
     # ----------------------------------------------------------------- read
     def list_sessions(self):
@@ -171,6 +185,138 @@ class ChatManager:
             understanding=understanding,
             prediction=prediction,
             used_memories=memories,
+        )
+
+    # ---------------------------------------------------------------- voice
+    def handle_voice(self, session_id: str, audio_bytes: bytes) -> ChatResponse:
+        """Transcribe + voiceprint a spoken turn.
+
+        - awaiting_identity: match the voiceprint against known people, also
+          extract a candidate name from the transcript, stash the embedding and
+          return suggestions WITHOUT binding (the user confirms via confirm_voice).
+        - active: strengthen the bound person's voiceprint and run the normal
+          memory-aware reply on the transcript.
+        """
+        import numpy as np  # local import keeps text-only mode numpy-light
+
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError("session not found")
+
+        from app.voice.engine import engine
+
+        transcript, emb = engine.process(audio_bytes)
+        emb = np.asarray(emb, dtype=np.float32)
+
+        if session.state == "awaiting_identity":
+            return self._voice_identity(session_id, transcript, emb)
+        return self._voice_active(session.person or "对方", session_id, transcript, emb)
+
+    def _voice_identity(self, session_id: str, transcript: str, emb) -> ChatResponse:
+        self._pending_voiceprints[session_id] = emb
+
+        suggestions: list[VoiceSuggestion] = []
+        matches = self.voiceprints.match(emb)
+        best_person = ""
+        best_score = 0.0
+        if matches:
+            best_person, best_score = matches[0]
+
+        # high-confidence voiceprint -> bind directly, skip the confirm step
+        if best_person and best_score >= settings.voiceprint_strong_threshold:
+            if transcript.strip():
+                self.sessions.add_message(session_id, "user", transcript.strip())
+            response = self.confirm_voice(session_id, best_person, auto=True)
+            response.transcript = transcript
+            return response
+
+        for person, score in matches[:3]:
+            if score >= settings.voiceprint_threshold:
+                suggestions.append(
+                    VoiceSuggestion(person=person, score=round(score, 4), source="voiceprint")
+                )
+
+        # also offer a name parsed from what they just said
+        name_from_text = self._extract_name(transcript) if transcript.strip() else ""
+        if name_from_text and not any(s.person == name_from_text for s in suggestions):
+            suggestions.append(
+                VoiceSuggestion(person=name_from_text, score=0.0, source="transcript")
+            )
+
+        if suggestions and suggestions[0].source == "voiceprint":
+            top = suggestions[0].person
+            reply = f"我好像听出你的声音了～你是 {top} 吗？是的话点确认，不是请告诉我你的名字。"
+        elif name_from_text:
+            reply = f"你好！我听你说你是 {name_from_text}，对吗？确认一下我就记住你的声音。"
+        else:
+            reply = "你好！我还没听出你是谁，能告诉我你的名字吗？"
+
+        self.sessions.add_message(session_id, "assistant", reply)
+        return ChatResponse(
+            reply=reply,
+            identified=False,
+            person=None,
+            transcript=transcript,
+            voice_suggestions=suggestions,
+        )
+
+    def _voice_active(self, person: str, session_id: str, transcript: str, emb) -> ChatResponse:
+        # strengthen the speaker's voiceprint with this fresh utterance
+        try:
+            self.voiceprints.enroll(person, emb)
+        except Exception:
+            pass
+
+        message = transcript.strip() or "（这段语音没有听清）"
+        self.sessions.add_message(session_id, "user", message)
+        response = self._handle_active(person, session_id, message)
+        response.transcript = transcript
+        return response
+
+    def confirm_voice(self, session_id: str, person: str, auto: bool = False) -> ChatResponse:
+        """Bind the (confirmed / corrected / auto-recognised) identity.
+
+        ``auto`` is set when the voiceprint matched with high confidence and we
+        bound the person without asking, so the greeting can reflect that.
+        """
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise KeyError("session not found")
+
+        name = person.strip() or "朋友"
+        self.sessions.bind_person(session_id, name)
+        self.self_memory.record_acquaintance(name)
+
+        emb = self._pending_voiceprints.pop(session_id, None)
+        if emb is not None:
+            try:
+                self.voiceprints.enroll(name, emb)
+            except Exception:
+                pass
+
+        known = self.agent.store.persona.get(name)
+        if auto:
+            if known and known.mention_count > 0:
+                traits = sorted(known.traits, key=known.traits.get, reverse=True)[:2]
+                hint = f"印象里你{'、'.join(traits)}。" if traits else ""
+                reply = f"{name}！一听声音我就认出你啦～{hint}今天想聊点什么？"
+            else:
+                reply = f"听声音应该是{name}吧～我先这么叫你啦，要是认错了告诉我。今天想聊点什么？"
+        elif known and known.mention_count > 0:
+            traits = sorted(known.traits, key=known.traits.get, reverse=True)[:2]
+            hint = f"我记得你～{('印象里你' + '、'.join(traits)) if traits else ''}。"
+            reply = f"{name}，又见面啦！{hint} 我已经记住你的声音了，今天想聊点什么？"
+        else:
+            reply = f"{name}，你好！我记住你的声音啦，下次一开口我就能认出你。想聊些什么都可以告诉我。"
+
+        self.sessions.add_message(session_id, "assistant", reply)
+        understanding = self._build_understanding(name)
+        return ChatResponse(
+            reply=reply,
+            identified=True,
+            person=name,
+            understanding=understanding,
+            used_memories=[],
         )
 
     # --------------------------------------------------------- understanding

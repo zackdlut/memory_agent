@@ -155,6 +155,13 @@ class EntityResolver:
             return self.resolve(target) or target
         self.store.persona.merge(source, target)
         self.store.semantic.merge_person(source, target)
+        # keep any recorded voiceprint following the surviving person
+        try:
+            from app.voice.store import VoiceprintStore
+
+            VoiceprintStore().merge(source, target)
+        except Exception:
+            pass
         self.store.commit()
         return target
 

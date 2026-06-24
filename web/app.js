@@ -2,8 +2,12 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 async function api(path, opts = {}) {
+  // don't force a JSON content-type when sending FormData (let the browser set
+  // the multipart boundary header itself)
+  const isForm = opts.body instanceof FormData;
+  const headers = isForm ? {} : { "Content-Type": "application/json" };
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
+    headers: { ...headers, ...(opts.headers || {}) },
     ...opts,
   });
   if (!res.ok) {
@@ -707,6 +711,24 @@ $("#new-chat-btn").addEventListener("click", async () => {
 function setChatEnabled(on) {
   $("#chat-input").disabled = !on;
   $("#chat-send").disabled = !on;
+  const mic = $("#chat-mic");
+  if (mic) mic.disabled = !on || !voiceSupported;
+}
+
+// ---------------------------------------------------------------- TTS
+function speak(text) {
+  if (!$("#tts-toggle") || !$("#tts-toggle").checked) return;
+  if (!("speechSynthesis" in window) || !text) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "zh-CN";
+    const zh = (window.speechSynthesis.getVoices() || []).find((v) =>
+      (v.lang || "").toLowerCase().startsWith("zh")
+    );
+    if (zh) u.voice = zh;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
 }
 
 async function openSession(id) {
@@ -718,6 +740,7 @@ async function openSession(id) {
     el.classList.toggle("active", el.dataset.id === id)
   );
   resetSidePanel();
+  clearVoiceUI();
   try {
     const detail = await api(`/api/chat/session/${id}`);
     currentPerson = detail.session.person || null;
@@ -730,30 +753,51 @@ async function openSession(id) {
   }
 }
 
-function bubbleHTML(role, content, typing = false) {
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function bubbleHTML(role, content, typing = false, ts = null) {
   const isA = role === "assistant";
-  const av = avatarHTML(isA ? ASSISTANT_NAME : currentPerson || "我", 28);
-  const who = isA ? ASSISTANT_NAME : "我";
-  const body = typing ? "三叶虫正在思考…" : esc(content);
-  return `<div class="bubble ${role}${typing ? " typing" : ""}">
-    <div class="bubble-head">${av}<span class="who">${esc(who)}</span></div>
-    <div class="bubble-body">${body}</div>
+  const who = isA ? ASSISTANT_NAME : currentPerson || "我";
+  const av = avatarHTML(who, 30);
+  const time = ts ? `<time class="msg-time">${fmtTime(ts)}</time>` : "";
+  const body = typing
+    ? `<span class="typing-dots" aria-label="三叶虫正在思考"><i></i><i></i><i></i></span>`
+    : esc(content);
+  return `<div class="msg ${role}${typing ? " typing" : ""}">
+    ${av}
+    <div class="msg-col">
+      <div class="msg-meta"><span class="who">${esc(who)}</span>${time}</div>
+      <div class="bubble ${role}">${body}</div>
+    </div>
   </div>`;
+}
+
+// keep the view pinned to the latest message, even while the LLM streams in
+function scrollToBottom(box, smooth = true) {
+  box.scrollTo({ top: box.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 }
 
 function renderMessages(msgs) {
   const box = $("#chat-messages");
-  box.innerHTML = msgs.map((m) => bubbleHTML(m.role, m.content)).join("");
-  box.scrollTop = box.scrollHeight;
+  box.innerHTML = msgs
+    .map((m) => bubbleHTML(m.role, m.content, false, m.created_at))
+    .join("");
+  scrollToBottom(box, false);
 }
 
 function appendBubble(role, content, typing = false) {
   const box = $("#chat-messages");
   const tmp = document.createElement("div");
-  tmp.innerHTML = bubbleHTML(role, content, typing).trim();
+  const ts = typing ? null : Date.now() / 1000;
+  tmp.innerHTML = bubbleHTML(role, content, typing, ts).trim();
   const div = tmp.firstElementChild;
   box.appendChild(div);
-  box.scrollTop = box.scrollHeight;
+  scrollToBottom(box);
   return div;
 }
 
@@ -773,6 +817,7 @@ async function sendChat() {
     typing.remove();
     if (r.person) currentPerson = r.person;
     appendBubble("assistant", r.reply);
+    speak(r.reply);
     if (r.person) $("#side-person").textContent = r.person;
     renderSide(r);
     refreshStats();
@@ -790,6 +835,176 @@ $("#chat-send").addEventListener("click", sendChat);
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendChat();
 });
+
+// ---------------------------------------------------------------- voice
+const voiceSupported =
+  !!navigator.mediaDevices &&
+  !!navigator.mediaDevices.getUserMedia &&
+  typeof window.MediaRecorder !== "undefined";
+
+let mediaRecorder = null;
+let recordChunks = [];
+let recording = false;
+
+function voiceStatus(text) {
+  const el = $("#voice-status");
+  if (!el) return;
+  if (!text) {
+    el.classList.add("hidden");
+    el.textContent = "";
+  } else {
+    el.classList.remove("hidden");
+    el.textContent = text;
+  }
+}
+
+function clearVoiceUI() {
+  const c = $("#voice-confirm");
+  if (c) {
+    c.classList.add("hidden");
+    c.innerHTML = "";
+  }
+  voiceStatus("");
+}
+
+async function toggleRecording() {
+  if (!voiceSupported) {
+    alert("当前浏览器不支持录音（需要 MediaRecorder + 麦克风权限）。");
+    return;
+  }
+  if (!currentSession) return;
+  if (recording) {
+    stopRecording();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recordChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      await uploadVoice(blob);
+    };
+    mediaRecorder.start();
+    recording = true;
+    $("#chat-mic").classList.add("recording");
+    $("#chat-mic").textContent = "■";
+    voiceStatus("聆听中… 再按一下麦克风结束");
+  } catch (e) {
+    alert("无法访问麦克风：" + e.message);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && recording) {
+    recording = false;
+    $("#chat-mic").classList.remove("recording");
+    $("#chat-mic").textContent = "🎙";
+    voiceStatus("识别中…");
+    try {
+      mediaRecorder.stop();
+    } catch (e) {}
+  }
+}
+
+async function uploadVoice(blob) {
+  if (!currentSession) return;
+  setChatEnabled(false);
+  try {
+    const fd = new FormData();
+    fd.append("session_id", currentSession);
+    fd.append("audio", blob, "voice.webm");
+    const r = await api("/api/chat/voice", { method: "POST", body: fd });
+    voiceStatus("");
+
+    if (!r.identified && !r.person) {
+      // identity stage: show transcript + confirm bar, do not bind yet
+      if (r.transcript) $("#chat-input").value = r.transcript;
+      appendBubble("assistant", r.reply);
+      speak(r.reply);
+      renderVoiceConfirm(r);
+    } else {
+      // active stage: full message round-trip
+      if (r.transcript) appendBubble("user", r.transcript);
+      if (r.person) currentPerson = r.person;
+      appendBubble("assistant", r.reply);
+      speak(r.reply);
+      if (r.person) $("#side-person").textContent = r.person;
+      renderSide(r);
+      refreshStats();
+      loadSessions();
+    }
+  } catch (e) {
+    voiceStatus("");
+    appendBubble("assistant", "（语音出错了：" + e.message + "）");
+  } finally {
+    setChatEnabled(true);
+  }
+}
+
+function renderVoiceConfirm(r) {
+  const box = $("#voice-confirm");
+  if (!box) return;
+  const sugg = r.voice_suggestions || [];
+  const top = sugg[0];
+  const chips = sugg
+    .map(
+      (s) =>
+        `<button class="vc-chip" data-person="${esc(s.person)}">${esc(s.person)}${
+          s.source === "voiceprint" ? ` <small>声纹 ${(s.score * 100).toFixed(0)}%</small>` : " <small>听写</small>"
+        }</button>`
+    )
+    .join("");
+  box.innerHTML = `
+    <div class="vc-title">${top ? "听声音你是不是 <b>" + esc(top.person) + "</b>？" : "你是谁呀？"}</div>
+    <div class="vc-chips">${chips}</div>
+    <div class="vc-manual">
+      <input id="vc-name" type="text" placeholder="都不是？输入你的名字" value="${esc(r.transcript ? "" : "")}" />
+      <button id="vc-confirm" class="primary">确认身份</button>
+    </div>`;
+  box.classList.remove("hidden");
+  $$("#voice-confirm .vc-chip").forEach((b) =>
+    b.addEventListener("click", () => confirmVoice(b.dataset.person))
+  );
+  $("#vc-confirm").addEventListener("click", () => {
+    const name = $("#vc-name").value.trim();
+    if (name) confirmVoice(name);
+  });
+}
+
+async function confirmVoice(person) {
+  if (!currentSession || !person) return;
+  clearVoiceUI();
+  setChatEnabled(false);
+  try {
+    const r = await api("/api/chat/voice/confirm", {
+      method: "POST",
+      body: JSON.stringify({ session_id: currentSession, person }),
+    });
+    if (r.person) currentPerson = r.person;
+    appendBubble("assistant", r.reply);
+    speak(r.reply);
+    if (r.person) $("#side-person").textContent = r.person;
+    renderSide(r);
+    $("#chat-input").value = "";
+    refreshStats();
+    loadSessions();
+  } catch (e) {
+    appendBubble("assistant", "（确认身份出错了：" + e.message + "）");
+  } finally {
+    setChatEnabled(true);
+  }
+}
+
+$("#chat-mic").addEventListener("click", toggleRecording);
+// warm up voice list for TTS (some browsers populate asynchronously)
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+}
 
 function resetSidePanel() {
   $("#side-person").textContent = "…";

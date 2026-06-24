@@ -68,6 +68,34 @@ class Settings:
         default_factory=lambda: _get("ASSISTANT_NAME", default="三叶虫") or "三叶虫"
     )
 
+    # --- voice chat + voiceprint ----------------------------------------
+    # All voice deps are lazy-loaded; text-only mode never imports them.
+    voice_enabled: bool = field(
+        default_factory=lambda: (_get("VOICE_ENABLED", default="1") or "1") not in ("0", "false", "False")
+    )
+    whisper_model: str = field(
+        default_factory=lambda: _get("WHISPER_MODEL", default="small") or "small"
+    )
+    whisper_device: str = field(
+        default_factory=lambda: _get("WHISPER_DEVICE", default="cpu") or "cpu"
+    )
+    whisper_compute_type: str = field(
+        default_factory=lambda: _get("WHISPER_COMPUTE_TYPE", default="int8") or "int8"
+    )
+    whisper_language: str = field(
+        default_factory=lambda: _get("WHISPER_LANGUAGE", default="zh") or "zh"
+    )
+    # cosine-similarity thresholds for matching a voiceprint to a known person
+    voiceprint_threshold: float = field(
+        default_factory=lambda: float(_get("VOICEPRINT_THRESHOLD", default="0.72") or 0.72)
+    )
+    # at/above this similarity we auto-bind the identity without asking
+    voiceprint_strong_threshold: float = field(
+        default_factory=lambda: float(
+            _get("VOICEPRINT_STRONG_THRESHOLD", default="0.70") or 0.70
+        )
+    )
+
     # --- retrieval / evolution tuning -----------------------------------
     episodic_top_k: int = 8
     rerank_keep: int = 6

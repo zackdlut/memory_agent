@@ -101,6 +101,8 @@ python -m scripts.eval   # 计算 entity / recall / prediction 三项指标
 | GET | `/api/chat/sessions` | 会话列表（支持多人多会话） |
 | GET | `/api/chat/session/{id}` | 会话详情 + 全部消息 |
 | POST | `/api/chat/message` | 发消息，返回回复 + 理解 + 行为预测 + 命中记忆 |
+| POST | `/api/chat/voice` | 上传语音（multipart：`session_id` + `audio`），返回转写 + 声纹候选 / 回复 |
+| POST | `/api/chat/voice/confirm` | 确认/纠正声纹识别出的身份并登记声纹（`{session_id, person}`） |
 | DELETE | `/api/chat/session/{id}` | 删除会话 |
 
 ## 三叶虫聊天助手
@@ -117,6 +119,23 @@ python -m scripts.eval   # 计算 entity / recall / prediction 三项指标
 
 可通过 `.env` 的 `ASSISTANT_NAME` 修改助手名字。
 
+## 语音聊天 + 声纹识别
+
+聊天页输入框左侧新增麦克风按钮，可用语音和三叶虫对话；右下角「语音回复」开关打开后，三叶虫会用浏览器自带的 TTS 朗读回复。
+
+- **语音转文字**：服务端用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（默认中文）把你说的话转写成文本，再走原有聊天流水线。
+- **声纹识别**：每段语音同时用 [Resemblyzer](https://github.com/resemble-ai/Resemblyzer) 提取一段 256 维「声纹」向量。
+  - 新会话开口时，系统把你的声纹与已登记的人做余弦相似度匹配：**相似度 ≥ 70%（`VOICEPRINT_STRONG_THRESHOLD`）直接绑定身份、无需确认**；低于该值则给出候选请你**确认或纠正**，避免认错人。绑定后把声纹登记到该人物名下。
+  - 后续每轮语音都会以「滑动平均」强化该人物的声纹，越聊越准；下次一开口即可被认出。
+  - 人物合并（`/api/person/merge`）时声纹会自动跟随到保留下来的人物。
+- **隐私**：只持久化声纹向量（存在 `memory.db` 的 `voiceprints` 表），**不保存任何原始音频**。
+- **依赖与降级**：语音依赖（`faster-whisper`、`resemblyzer`，会带入 `torch`）是**懒加载**的——纯文字模式下完全不会加载；未安装或 `VOICE_ENABLED=0` 时，语音接口返回 503，文字聊天照常工作。
+- **浏览器要求**：录音用 `MediaRecorder` + 麦克风权限，需在安全上下文（`http://localhost:8000` 或 HTTPS）下访问；首次会请求麦克风授权。
+
+相关环境变量（均有默认值）：`VOICE_ENABLED`、`WHISPER_MODEL`(默认 `small`)、`WHISPER_DEVICE`(默认 `cpu`)、`WHISPER_COMPUTE_TYPE`(默认 `int8`)、`WHISPER_LANGUAGE`(默认 `zh`)、`VOICEPRINT_THRESHOLD`(候选门槛，默认 `0.72`)、`VOICEPRINT_STRONG_THRESHOLD`(自动绑定门槛，默认 `0.70`)。
+
+> 首次使用语音会下载 whisper 模型并加载 Resemblyzer，有一次性下载与内存开销；`resemblyzer` 依赖的 `webrtcvad` 在部分系统首次安装时需要编译工具链。
+
 ---
 
 ## 设计要点
@@ -131,7 +150,7 @@ python -m scripts.eval   # 计算 entity / recall / prediction 三项指标
 全部落在 `DATA_DIR`（默认 `./data/`）：
 
 - `episodic.index`：FAISS 索引
-- `memory.db`：SQLite（episodes + personas）
+- `memory.db`：SQLite（episodes + personas + chat 会话 + voiceprints 声纹向量）
 - `graph.json`：语义图谱快照
 - `self.json`：三叶虫的自我档案（进化特质/偏好/自我记忆）
 
@@ -139,4 +158,4 @@ python -m scripts.eval   # 计算 entity / recall / prediction 三项指标
 
 ## 技术栈
 
-Python 3.10+ · FastAPI · FAISS · NetworkX · SQLite · Ollama (qwen3.5:9b + nomic-embed-text) · vis-network
+Python 3.10+ · FastAPI · FAISS · NetworkX · SQLite · Ollama (qwen3.5:9b + nomic-embed-text) · vis-network · faster-whisper + Resemblyzer（语音/声纹，可选）

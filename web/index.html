@@ -105,10 +105,16 @@
           </div>
           <div id="chat-window" class="chat-window hidden">
             <div id="chat-messages" class="chat-messages"></div>
+            <div id="voice-confirm" class="voice-confirm hidden"></div>
+            <div id="voice-status" class="voice-status hidden"></div>
             <div class="chat-input">
+              <button id="chat-mic" class="mic-btn" title="按一下开始说话，再按一下结束" disabled>🎙</button>
               <input id="chat-input" type="text" placeholder="输入消息，回车发送…" disabled />
               <button id="chat-send" class="primary" disabled>发送</button>
             </div>
+            <label class="tts-toggle">
+              <input id="tts-toggle" type="checkbox" /> 语音回复（三叶虫朗读）
+            </label>
           </div>
         </div>
 

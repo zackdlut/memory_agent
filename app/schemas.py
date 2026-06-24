@@ -207,6 +207,12 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class VoiceSuggestion(BaseModel):
+    person: str
+    score: float = 0.0
+    source: str = "voiceprint"  # "voiceprint" | "transcript"
+
+
 class ChatResponse(BaseModel):
     reply: str
     identified: bool = False
@@ -214,6 +220,13 @@ class ChatResponse(BaseModel):
     understanding: Understanding | None = None
     prediction: Prediction | None = None
     used_memories: list[RetrievedItem] = Field(default_factory=list)
+    transcript: str | None = None
+    voice_suggestions: list[VoiceSuggestion] = Field(default_factory=list)
+
+
+class VoiceConfirmRequest(BaseModel):
+    session_id: str
+    person: str
 
 
 class SessionSummary(BaseModel):
