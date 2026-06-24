@@ -35,3 +35,22 @@ def test_self_profile_has_layers():
     assert isinstance(p.mood, MoodState)
     assert p.free_traits == {} and p.opinions == []
     assert "不伤害人" in p.core.invariants
+
+
+def test_apply_dimension_signal_drifts_and_can_pass_seed(temp_store):
+    sp = temp_store.self_profile
+    start = sp.get().dimensions.playfulness  # 0.3 种子
+    for _ in range(15):
+        sp.apply_dimension_signal("playfulness", "+")  # +0.04 each
+    val = sp.get().dimensions.playfulness
+    assert val > start and val > 0.6 and val <= 1.0  # 盖过种子、且被 clamp
+
+
+def test_apply_dimension_signal_clamps_and_ignores_unknown(temp_store):
+    sp = temp_store.self_profile
+    for _ in range(50):
+        sp.apply_dimension_signal("warmth", "++")
+    assert sp.get().dimensions.warmth == 1.0
+    sp.apply_dimension_signal("nope", "+")     # 未知维度：无副作用
+    sp.apply_dimension_signal("warmth", "???")  # 未知 sign：无副作用
+    assert sp.get().dimensions.warmth == 1.0
