@@ -15,6 +15,7 @@ with the current person, and (c) mutual acquaintances it shares with them.
 
 from __future__ import annotations
 
+from app.chat.style import compile_style
 from app.config import settings
 from app.llm import llm
 from app.llm.prompts import SELF_REFLECT_SYSTEM, SELF_REFLECT_TEMPLATE
@@ -139,7 +140,9 @@ class SelfMemory:
 
     def self_context(self, person: str) -> str:
         profile = self.store.self_profile.get()
-        traits = "、".join(self.store.self_profile.top_traits())
+        traits = "、".join(self.store.self_profile.top_traits()) or "、".join(
+            profile.core.invariants
+        )
         lines = [f"你是{self.name}，{profile.role}；你现在的特质：{traits}。"]
 
         recent_self = self.store.self_profile.recent_experiences(limit=2)
@@ -159,6 +162,83 @@ class SelfMemory:
 
         return "\n".join(lines)
 
+    def style_block(self, person: str) -> str:
+        sp = self.store.self_profile
+        return compile_style(
+            sp.get().dimensions,
+            sp.current_mood(),
+            self.relationship_label(person),
+            self._familiarity(person),
+        )
+
+    def self_talking_points(self, person: str, topic_text: str) -> str:
+        profile = self.store.self_profile.get()
+        query = (topic_text or "").strip()
+        if not query:
+            return ""
+
+        def _terms(text: str) -> set[str]:
+            raw = (text or "").strip()
+            terms = {part for part in raw.split() if len(part) >= 2}
+            terms.update(raw[i : i + 2] for i in range(max(len(raw) - 1, 0)))
+            return {term for term in terms if term.strip()}
+
+        def _matches(*parts: str) -> bool:
+            haystack = " ".join(part for part in parts if part)
+            if not haystack:
+                return False
+            return query in haystack or haystack in query or any(
+                term in haystack for term in _terms(query)
+            )
+
+        op = None
+        for cand in sorted(profile.opinions, key=lambda o: o.weight, reverse=True):
+            if _matches(cand.topic, cand.stance):
+                op = cand
+                break
+
+        ex = None
+        for cand in reversed(profile.experiences):
+            if _matches(cand.summary):
+                ex = cand
+                break
+
+        pts = []
+        if op:
+            pts.append(f"你对这类话题的看法：{op.stance}")
+        if ex:
+            pts.append(f"你想起一件事：{ex.summary}")
+        if not pts:
+            return ""
+        return "【你可以在自然时机提起的(自己的观点/经历，别硬塞)】\n" + "\n".join(
+            f"- {p}" for p in pts
+        )
+
+    def self_narrative(self) -> str:
+        sp = self.store.self_profile.get()
+        dims = sp.dimensions.model_dump()
+        labels = {
+            "warmth": "温暖",
+            "empathy": "共情",
+            "patience": "耐心",
+            "curiosity": "好奇",
+            "playfulness": "俏皮",
+            "assertiveness": "有主见",
+            "talkativeness": "健谈",
+        }
+        top = [
+            labels[name]
+            for name, _ in sorted(dims.items(), key=lambda item: item[1], reverse=True)[:3]
+        ]
+        parts = [f"我是{self.name}，现在的我{('、'.join(top))}"]
+        if sp.opinions:
+            strongest = max(sp.opinions, key=lambda o: o.weight)
+            parts.append(strongest.stance)
+        recent = self.store.self_profile.recent_experiences(limit=1)
+        if recent:
+            parts.append(recent[0].summary)
+        return "；".join(parts) + "。"
+
     # ------------------------------------------------------------- profile view
     def profile_view(self) -> SelfProfileView:
         profile: SelfProfile = self.store.self_profile.get()
@@ -171,4 +251,11 @@ class SelfMemory:
             for p in self.store.semantic.knows(self.name)
         ]
         known.sort(key=lambda k: k.familiarity, reverse=True)
-        return SelfProfileView(profile=profile, known_people=known)
+        return SelfProfileView(
+            profile=profile,
+            dimensions=profile.dimensions,
+            mood=self.store.self_profile.current_mood(),
+            opinions=sorted(profile.opinions, key=lambda o: o.weight, reverse=True),
+            narrative=self.self_narrative(),
+            known_people=known,
+        )
