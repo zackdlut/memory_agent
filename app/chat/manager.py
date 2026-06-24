@@ -13,6 +13,8 @@ Flow:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from app.agent import MemoryAgent, agent
 from app.chat.self_memory import SelfMemory
 from app.chat.session_store import SessionStore
@@ -52,6 +54,7 @@ class ChatManager:
             self.self_memory.ensure(known)
         except Exception:
             pass
+        self._bg = ThreadPoolExecutor(max_workers=1)
 
     # ---------------------------------------------------------------- create
     def create_session(self) -> CreateSessionResponse:
@@ -149,28 +152,30 @@ class ChatManager:
             for m in history_msgs
         ) or "（这是对话开始）"
 
-        # 3) memory-aware reply (with 三叶虫's own self + social memory)
+        # 3) memory-aware reply (with 三叶虫's own self + social memory + style)
         self_context = self.self_memory.self_context(person)
+        style_block = self.self_memory.style_block(person)
+        talking_points = self.self_memory.self_talking_points(person, text)
         prompt = CHAT_REPLY_TEMPLATE.format(
             person=person,
             self_context=self_context,
+            style_block=style_block,
             memory=memory_block,
+            talking_points=talking_points,
             history=history,
             message=text,
         )
-        reply = llm.chat(prompt, system=CHAT_REPLY_SYSTEM, temperature=0.6).strip()
+        temperature = self._reply_temperature(self.self_memory.store.self_profile.get().dimensions)
+        reply = llm.chat(prompt, system=CHAT_REPLY_SYSTEM, temperature=temperature).strip()
         self.sessions.add_message(session_id, "assistant", reply)
 
-        # 4) ingest the whole exchange (user + assistant)
-        try:
-            self.agent.ingest(f"{person}: {text}\n{self.assistant}: {reply}", source="chat")
-        except Exception:
-            pass
+        # 4) 反思 + 摄入：后台异步（零额外回复延迟），测试可切同步
+        if settings.reflect_async:
+            self._bg.submit(self._post_exchange, person, text, reply)
+        else:
+            self._post_exchange(person, text, reply)
 
-        # 4b) 三叶虫 reflects on itself: grow its own traits / self-memory
-        self.self_memory.reflect(person, text, reply)
-
-        # 5) side-panel: understanding + behavior prediction
+        # 5) side-panel: understanding + behavior prediction（读本轮之前状态）
         understanding = self._build_understanding(person)
         prediction: Prediction | None = None
         try:
@@ -186,6 +191,21 @@ class ChatManager:
             prediction=prediction,
             used_memories=memories,
         )
+
+    def _reply_temperature(self, dims) -> float:
+        base = 0.5 + 0.3 * dims.playfulness
+        base += 0.1 * (dims.talkativeness - 0.5)
+        return round(max(0.3, min(0.95, base)), 3)
+
+    def _post_exchange(self, person: str, text: str, reply: str) -> None:
+        try:
+            self.agent.ingest(f"{person}: {text}\n{self.assistant}: {reply}", source="chat")
+        except Exception:
+            pass
+        try:
+            self.self_memory.reflect(person, text, reply)
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- voice
     def handle_voice(self, session_id: str, audio_bytes: bytes) -> ChatResponse:
